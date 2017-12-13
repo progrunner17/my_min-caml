@@ -2,13 +2,14 @@
 
 open Syntax
 
+(* t1ã¨t2ã®unifyã«å¤±æ•—ã—ãŸã‚‰ç™ºç”Ÿ @ unify  -> g*)
 exception Unify of Type.t * Type.t
 exception Error of t * Type.t * Type.t
 
 let extenv = ref M.empty
 
 (* for pretty printing (and type normalization) *)
-let rec deref_typ = function (* ·¿ÊÑ¿ô¤òÃæ¿È¤Ç¤ª¤­¤«¤¨¤ë´Ø¿ô (caml2html: typing_deref) *)
+let rec deref_typ = function (* åž‹å¤‰æ•°ã‚’ä¸­èº«ã§ãŠãã‹ãˆã‚‹é–¢æ•° (caml2html: typing_deref) *)
   | Type.Fun(t1s, t2) -> Type.Fun(List.map deref_typ t1s, deref_typ t2)
   | Type.Tuple(ts) -> Type.Tuple(List.map deref_typ ts)
   | Type.Array(t) -> Type.Array(deref_typ t)
@@ -20,45 +21,75 @@ let rec deref_typ = function (* ·¿ÊÑ¿ô¤òÃæ¿È¤Ç¤ª¤­¤«¤¨¤ë´Ø¿ô (caml2html: typing_
       let t' = deref_typ t in
       r := Some(t');
       t'
+(* | Unit| Bool| Int| Float  ãŒæ¥ãŸã‚‰ãã®ã¾ã¾è¿”ã™
+Typing.g ã§
+    | Bool(_) -> Type.Bool
+  ã¿ãŸã„ãªå½¢ã§ç”Ÿæˆã•ã‚Œã‚‹
+*)
   | t -> t
+
+
+
+(* å¤‰æ•°ã¯åž‹æƒ…å ±ã‚’æŒã¤ *)
 let rec deref_id_typ (x, t) = (x, deref_typ t)
-let rec deref_term = function
-  | Not(e) -> Not(deref_term e)
-  | Neg(e) -> Neg(deref_term e)
-  | Add(e1, e2) -> Add(deref_term e1, deref_term e2)
-  | Sub(e1, e2) -> Sub(deref_term e1, deref_term e2)
-  | Eq(e1, e2) -> Eq(deref_term e1, deref_term e2)
-  | LE(e1, e2) -> LE(deref_term e1, deref_term e2)
-  | FNeg(e) -> FNeg(deref_term e)
-  | FAdd(e1, e2) -> FAdd(deref_term e1, deref_term e2)
-  | FSub(e1, e2) -> FSub(deref_term e1, deref_term e2)
-  | FMul(e1, e2) -> FMul(deref_term e1, deref_term e2)
-  | FDiv(e1, e2) -> FDiv(deref_term e1, deref_term e2)
-  | If(e1, e2, e3) -> If(deref_term e1, deref_term e2, deref_term e3)
-  | Let(xt, e1, e2) -> Let(deref_id_typ xt, deref_term e1, deref_term e2)
+
+
+let rec deref_term env = function
+  | Not(e) -> Not(deref_term env e)
+  | Neg(e) -> Neg(deref_term env e)
+  | Add(e1, e2) -> (
+        let et1 = g env e1 in
+        let et2 = g env e2 in
+        match et1,et2 with
+        | Type.Float,Type.Float -> FAdd(deref_term env e1, deref_term env e2)
+        | _,_ -> Add(deref_term env e1, deref_term env e2))
+  | Sub(e1, e2) -> (
+        let et1 = g env e1 in
+        let et2 = g env e2 in
+        match et1,et2 with
+        | Type.Float,Type.Float -> FSub(deref_term env e1, deref_term env e2)
+        | _,_ -> Sub(deref_term env e1, deref_term env e2))
+  | Eq(e1, e2) -> Eq(deref_term env e1, deref_term env e2)
+  | LE(e1, e2) -> LE(deref_term env e1, deref_term env e2)
+  | FNeg(e) -> FNeg(deref_term env e)
+  | FAdd(e1, e2) -> FAdd(deref_term env e1, deref_term env e2)
+  | FSub(e1, e2) -> FSub(deref_term env e1, deref_term env e2)
+  | FMul(e1, e2) -> FMul(deref_term env e1, deref_term env e2)
+  | FDiv(e1, e2) -> FDiv(deref_term env e1, deref_term env e2)
+  | If(e1, e2, e3) -> If(deref_term env e1, deref_term env e2, deref_term env e3)
+  (* deref_id_typ ãŒãƒ¡ã‚¤ãƒ³ã®å‹•ä½œ *)
+  | Let(xt, e1, e2) -> Let(deref_id_typ xt, deref_term env e1, deref_term env e2)
   | LetRec({ name = xt; args = yts; body = e1 }, e2) ->
+        (* deref_id_typ ãŒãƒ¡ã‚¤ãƒ³ã®å‹•ä½œ *)
       LetRec({ name = deref_id_typ xt;
                args = List.map deref_id_typ yts;
-               body = deref_term e1 },
-             deref_term e2)
-  | App(e, es) -> App(deref_term e, List.map deref_term es)
-  | Tuple(es) -> Tuple(List.map deref_term es)
-  | LetTuple(xts, e1, e2) -> LetTuple(List.map deref_id_typ xts, deref_term e1, deref_term e2)
-  | Array(e1, e2) -> Array(deref_term e1, deref_term e2)
-  | Get(e1, e2) -> Get(deref_term e1, deref_term e2)
-  | Put(e1, e2, e3) -> Put(deref_term e1, deref_term e2, deref_term e3)
+               body = deref_term env e1 },
+             deref_term env e2)
+  | App(e, es) -> App(deref_term env e, List.map (deref_term env) es)
+  | Tuple(es) -> Tuple(List.map (deref_term env) es)
+  | LetTuple(xts, e1, e2) -> LetTuple(List.map deref_id_typ xts, (deref_term env) e1, (deref_term env) e2)
+  | Array(e1, e2) -> Array((deref_term env) e1, (deref_term env) e2)
+  | Get(e1, e2) -> Get((deref_term env) e1, (deref_term env) e2)
+  | Put(e1, e2, e3) -> Put((deref_term env) e1, (deref_term env) e2, (deref_term env) e3)
+(* Int(1)ã¿ãŸã„ã«æ¥ãŸæ¬¡ã¯1ãŒæ¥ã‚‹ã®ã§1ã‚’è¿”ã™ã¿ãŸã„ãªæ„Ÿã˜ *)
   | e -> e
 
-let rec occur r1 = function (* occur check (caml2html: typing_occur) *)
+
+and occur r1 = function (* occur check (caml2html: typing_occur) *)
   | Type.Fun(t2s, t2) -> List.exists (occur r1) t2s || occur r1 t2
   | Type.Tuple(t2s) -> List.exists (occur r1) t2s
   | Type.Array(t2) -> occur r1 t2
   | Type.Var(r2) when r1 == r2 -> true
+  (* å‚ç…§ã®ä¸­èº«ã‚’èª¿ã¹ãŸã„æ™‚ã«{contents = } ã¨ã„ã†å½¢ã‚’ã¤ãã‚‹ *)
   | Type.Var({ contents = None }) -> false
   | Type.Var({ contents = Some(t2) }) -> occur r1 t2
   | _ -> false
 
-let rec unify t1 t2 = (* ·¿¤¬¹ç¤¦¤è¤¦¤Ë¡¢·¿ÊÑ¿ô¤Ø¤ÎÂåÆþ¤ò¤¹¤ë (caml2html: typing_unify) *)
+
+
+
+(* Type.t -> () ãŸã ã—ã€å¤±æ•—ã—ãŸã‚‰error ã‚’ raiseã™ã‚‹ *)
+and unify t1 t2 = (* åž‹ãŒåˆã†ã‚ˆã†ã«ã€åž‹å¤‰æ•°ã¸ã®ä»£å…¥ã‚’ã™ã‚‹ (caml2html: typing_unify) *)
   match t1, t2 with
   | Type.Unit, Type.Unit | Type.Bool, Type.Bool | Type.Int, Type.Int | Type.Float, Type.Float -> ()
   | Type.Fun(t1s, t1'), Type.Fun(t2s, t2') ->
@@ -72,7 +103,7 @@ let rec unify t1 t2 = (* ·¿¤¬¹ç¤¦¤è¤¦¤Ë¡¢·¿ÊÑ¿ô¤Ø¤ÎÂåÆþ¤ò¤¹¤ë (caml2html: typing
   | Type.Var(r1), Type.Var(r2) when r1 == r2 -> ()
   | Type.Var({ contents = Some(t1') }), _ -> unify t1' t2
   | _, Type.Var({ contents = Some(t2') }) -> unify t1 t2'
-  | Type.Var({ contents = None } as r1), _ -> (* °ìÊý¤¬Ì¤ÄêµÁ¤Î·¿ÊÑ¿ô¤Î¾ì¹ç (caml2html: typing_undef) *)
+  | Type.Var({ contents = None } as r1), _ -> (* ä¸€æ–¹ãŒæœªå®šç¾©ã®åž‹å¤‰æ•°ã®å ´åˆ (caml2html: typing_undef) *)
       if occur r1 t2 then raise (Unify(t1, t2));
       r1 := Some(t2)
   | _, Type.Var({ contents = None } as r2) ->
@@ -80,7 +111,7 @@ let rec unify t1 t2 = (* ·¿¤¬¹ç¤¦¤è¤¦¤Ë¡¢·¿ÊÑ¿ô¤Ø¤ÎÂåÆþ¤ò¤¹¤ë (caml2html: typing
       r2 := Some(t1)
   | _, _ -> raise (Unify(t1, t2))
 
-let rec g env e = (* ·¿¿äÏÀ¥ë¡¼¥Á¥ó (caml2html: typing_g) *)
+and g env e = (* åž‹æŽ¨è«–ãƒ«ãƒ¼ãƒãƒ³ (caml2html: typing_g) *)
   try
     match e with
     | Unit -> Type.Unit
@@ -93,10 +124,20 @@ let rec g env e = (* ·¿¿äÏÀ¥ë¡¼¥Á¥ó (caml2html: typing_g) *)
     | Neg(e) ->
         unify Type.Int (g env e);
         Type.Int
-    | Add(e1, e2) | Sub(e1, e2) -> (* Â­¤·»»¡Ê¤È°ú¤­»»¡Ë¤Î·¿¿äÏÀ (caml2html: typing_add) *)
-        unify Type.Int (g env e1);
+    | Add(e1, e2) | Sub(e1, e2) -> (* è¶³ã—ç®—ï¼ˆã¨å¼•ãç®—ï¼‰ã®åž‹æŽ¨è«– (caml2html: typing_add) *)
+(*         unify Type.Int (g env e1);
         unify Type.Int (g env e2);
         Type.Int
+ *)
+(        try (unify Type.Int (g env e1);
+            unify Type.Int (g env e2);
+            Type.Int)
+        with Unify _ ->
+(* int ã§åž‹æŽ¨è«–ã«å¤±æ•—ã—ãŸã‚‰ floatã ã¨æ€ã£ã¦æŽ¨è«–*)
+        ( unify Type.Float (g env e1);
+                       unify Type.Float (g env e2);
+                       Type.Float))
+
     | FNeg(e) ->
         unify Type.Float (g env e);
         Type.Float
@@ -113,21 +154,21 @@ let rec g env e = (* ·¿¿äÏÀ¥ë¡¼¥Á¥ó (caml2html: typing_g) *)
         let t3 = g env e3 in
         unify t2 t3;
         t2
-    | Let((x, t), e1, e2) -> (* let¤Î·¿¿äÏÀ (caml2html: typing_let) *)
+    | Let((x, t), e1, e2) -> (* letã®åž‹æŽ¨è«– (caml2html: typing_let) *)
         unify t (g env e1);
         g (M.add x t env) e2
-    | Var(x) when M.mem x env -> M.find x env (* ÊÑ¿ô¤Î·¿¿äÏÀ (caml2html: typing_var) *)
+    | Var(x) when M.mem x env -> M.find x env (* å¤‰æ•°ã®åž‹æŽ¨è«– (caml2html: typing_var) *)
     | Var(x) when M.mem x !extenv -> M.find x !extenv
-    | Var(x) -> (* ³°ÉôÊÑ¿ô¤Î·¿¿äÏÀ (caml2html: typing_extvar) *)
+    | Var(x) -> (* å¤–éƒ¨å¤‰æ•°ã®åž‹æŽ¨è«– (caml2html: typing_extvar) *)
         Format.eprintf "free variable %s assumed as external@." x;
         let t = Type.gentyp () in
         extenv := M.add x t !extenv;
         t
-    | LetRec({ name = (x, t); args = yts; body = e1 }, e2) -> (* let rec¤Î·¿¿äÏÀ (caml2html: typing_letrec) *)
+    | LetRec({ name = (x, t); args = yts; body = e1 }, e2) -> (* let recã®åž‹æŽ¨è«– (caml2html: typing_letrec) *)
         let env = M.add x t env in
         unify t (Type.Fun(List.map snd yts, g (M.add_list yts env) e1));
         g env e2
-    | App(e, es) -> (* ´Ø¿ôÅ¬ÍÑ¤Î·¿¿äÏÀ (caml2html: typing_app) *)
+    | App(e, es) -> (* é–¢æ•°é©ç”¨ã®åž‹æŽ¨è«– (caml2html: typing_app) *)
         let t = Type.gentyp () in
         unify (g env e) (Type.Fun(List.map (g env) es, t));
         t
@@ -148,7 +189,7 @@ let rec g env e = (* ·¿¿äÏÀ¥ë¡¼¥Á¥ó (caml2html: typing_g) *)
         unify (Type.Array(t)) (g env e1);
         unify Type.Int (g env e2);
         Type.Unit
-  with Unify(t1, t2) -> raise (Error(deref_term e, deref_typ t1, deref_typ t2))
+  with Unify(t1, t2) -> raise (Error(deref_term env e, deref_typ t1, deref_typ t2))
 
 let f e =
   extenv := M.empty;
@@ -157,7 +198,7 @@ let f e =
   | Type.Unit -> ()
   | _ -> Format.eprintf "warning: final result does not have type unit@.");
 *)
-  (try unify Type.Unit (g M.empty e)
+  (try unify Type.Unit (g M.empty e) (*() ã¨ eã‚’ æŽ¨è«–ã—ãŸåž‹ã‚’unify  topã¯()ã«ãªã‚‹ã¯ãšã ã‹ã‚‰ï¼Ÿ*)
   with Unify _ -> failwith "top level does not have type unit");
   extenv := M.map deref_typ !extenv;
-  deref_term e
+  deref_term !extenv e
